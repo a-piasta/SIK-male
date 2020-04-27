@@ -1,0 +1,67 @@
+#!/usr/bin/perl
+use sigtrap qw/handler sighandler normal-signals/;
+
+sub fatal {
+  print STDERR "ERROR: ", $_[0], "\n";
+  $ret = 1;
+  exit;
+}
+
+$len = @ARGV;
+if ($len < 2) {
+  fatal "Too few arguments";
+}
+
+sub err {
+  if ($? == -1) {
+    printf STDERR "ERROR: failed to execute %s\n", $_[0];
+  } elsif ($? & 127) {
+    printf STDERR "ERROR: %s terminated by signal %d\n", $_[0], $?;
+  } else {
+    printf STDERR "ERROR: %s failed with exitcode %d\n", $_[0], $? >> 8;
+  }
+  $ret = 1;
+  exit;
+}
+
+sub sighandler {
+  sleep 1;
+  if (open(FD, '<', "/tmp/pid.txt")) {
+    $pid = <FD>;
+    close FD;
+    kill "SIGTERM", ($pid+0);
+  }
+  system "rm", "-f", "stunnel.conf", "/tmp/pid.txt";
+  exit $ret;
+}
+
+sub END {
+  sighandler @_;
+}
+
+if (@ARGV[1] =~ /^http:\/\/([-.\w]+)(:\d+)?($|[\/#?])/) { # match http
+  $port = $2 ? $2 : ":80";
+  system "./testhttp_raw", $1.$port, @ARGV;
+  if ($? != 0) {
+    err "testhttp_raw";
+  }
+} elsif (@ARGV[1] =~ /^https:\/\/([-.\w]+)(:\d+)?($|[\/#?])/) { # match https
+  open(FD, '>', "stunnel.conf")
+    or fatal "can't open stunnel config file";
+  print FD "pid = /tmp/pid.txt\n[service]\nclient = yes\naccept = localhost:2137\n";
+  $port = $2 ? $2 : ":443";
+  print FD "connect = $1$port\n";
+  close FD or fatal "can't close stunnel file";
+  system "stunnel", "stunnel.conf";
+  if ($? != 0) {
+    err "stunnel";
+  }
+  sleep 1;
+  system "./testhttp_raw", "localhost:2137", @ARGV;
+  if ($? != 0) {
+    err "testhttp_raw";
+  }
+} else {
+  fatal "wrong HTTP address (should begin with http:// or https://)";
+  exit;
+}
